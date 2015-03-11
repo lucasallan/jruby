@@ -470,6 +470,48 @@ class Array
     replace select(&block)
   end
 
+  def rassoc(obj)
+    each do |elem|
+      if elem.kind_of? Array and elem.at(1) == obj
+        return elem
+      end
+    end
+
+    nil
+  end
+
+  def repeated_permutation(combination_size, &block)
+    combination_size = combination_size.to_i
+    unless block_given?
+      return Enumerator.new(self, :repeated_permutation, combination_size)
+    end
+
+    if combination_size < 0
+      # yield nothing
+    elsif combination_size == 0
+      yield []
+    else
+      Rubinius.privately do
+        dup.compile_repeated_permutations(combination_size, [], 0, &block)
+      end
+    end
+
+    return self
+  end
+
+  def compile_repeated_permutations(combination_size, place, index, &block)
+    length.times do |i|
+      place[index] = i
+      if index < (combination_size-1)
+        compile_repeated_permutations(combination_size, place, index + 1, &block)
+      else
+        yield place.map { |element| self[element] }
+      end
+    end
+  end
+
+  private :compile_repeated_permutations
+
   def reverse_each
     return to_enum(:reverse_each) unless block_given?
 
@@ -483,6 +525,32 @@ class Array
     end
 
     self
+  end
+
+  def rindex(obj=undefined)
+    if undefined.equal?(obj)
+      return to_enum(:rindex, obj) unless block_given?
+
+      i = @total - 1
+      while i >= 0
+        return i if yield @tuple.at(@start + i)
+
+        # Compensate for the array being modified by the block
+        i = @total if i > @total
+
+        i -= 1
+      end
+    else
+      stop = @start - 1
+      i = stop + @total
+      tuple = @tuple
+
+      while i > stop
+        return i - @start if tuple.at(i) == obj
+        i -= 1
+      end
+    end
+    nil
   end
 
   def rotate(n=1)
@@ -503,6 +571,52 @@ class Array
 
     ary = rotate(cnt)
     replace ary
+  end
+
+  def sample(count=undefined, options=undefined)
+    return at Kernel.rand(size) if undefined.equal? count
+
+    if undefined.equal? options
+      if o = Rubinius::Type.check_convert_type(count, Hash, :to_hash)
+        options = o
+        count = nil
+      else
+        options = nil
+        count = Rubinius::Type.coerce_to_collection_index count
+      end
+    else
+      count = Rubinius::Type.coerce_to_collection_index count
+      options = Rubinius::Type.coerce_to options, Hash, :to_hash
+    end
+
+    if count and count < 0
+      raise ArgumentError, "count must be greater than 0"
+    end
+
+    rng = options[:random] if options
+    rng = Kernel unless rng and rng.respond_to? :rand
+
+    unless count
+      random = Rubinius::Type.coerce_to_collection_index rng.rand(size)
+      raise RangeError, "random value must be >= 0" if random < 0
+      raise RangeError, "random value must be less than Array size" unless random < size
+
+      return at random
+    end
+
+    count = size if count > size
+    result = Array.new self
+    tuple = Rubinius::Mirror::Array.reflect(result).tuple
+
+    count.times do |i|
+      random = Rubinius::Type.coerce_to_collection_index rng.rand(size)
+      raise RangeError, "random value must be >= 0" if random < 0
+      raise RangeError, "random value must be less than Array size" unless random < size
+
+      tuple.swap i, random
+    end
+
+    return count == size ? result : result[0, count]
   end
 
   def find_index(obj=undefined)
@@ -536,6 +650,30 @@ class Array
     end
 
     at(idx)
+  end
+
+
+  def shuffle(options = undefined)
+    return dup.shuffle!(options) if instance_of? Array
+    Array.new(self).shuffle!(options)
+  end
+
+  def shuffle!(options = undefined)
+    Rubinius.check_frozen
+
+    random_generator = Kernel
+
+    unless undefined.equal? options
+      options = Rubinius::Type.coerce_to options, Hash, :to_hash
+      random_generator = options[:random] if options[:random].respond_to?(:rand)
+    end
+
+    size.times do |i|
+      r = i + random_generator.rand(size - i).to_int
+      raise RangeError, "random number too big #{r - i}" if r < 0 || r >= size
+      @tuple.swap(@start + i, @start + r)
+    end
+    self
   end
 
   def to_ary
